@@ -1,0 +1,72 @@
+name: Build SonmezKomboPlugin
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      assetto_ref:
+        description: "AssettoServer tag/branch (ornek: v0.0.55-preview44)"
+        required: false
+        default: ""
+
+env:
+  # AssettoServer kaynak repo ve surum. Surum etiketini GitHub > compujuckel/AssettoServer > Tags/Releases
+  # sayfasindan kontrol et; yanlissa "checkout" adiminda hata verir.
+  ASSETTO_REPO: compujuckel/AssettoServer
+  ASSETTO_REF_DEFAULT: v0.0.55-preview44
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Plugin kaynagini al
+        uses: actions/checkout@v4
+        with:
+          path: plugin-repo
+
+      - name: AssettoServer kaynagini al
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ASSETTO_REPO }}
+          ref: ${{ github.event.inputs.assetto_ref !=  && github.event.inputs.assetto_ref || env.ASSETTO_REF_DEFAULT }}
+          path: src
+
+      - name: Plugini AssettoServer/plugins altina koy
+        run: |
+          mkdir -p src/plugins
+          cp -r plugin-repo/SonmezKomboPlugin src/plugins/SonmezKomboPlugin
+
+      - name: AssettoServer framework surumunu oku
+        id: fw
+        run: |
+          FW=$(grep -oP "(?<=<TargetFramework>)[^<]+" src/AssettoServer/AssettoServer.csproj | head -n1)
+          echo "Framework: $FW"
+          echo "fw=$FW" >> $GITHUB_OUTPUT
+          sed -i "s|<TargetFramework>[^<]*</TargetFramework>|<TargetFramework>$FW</TargetFramework>|" src/plugins/SonmezKomboPlugin/SonmezKomboPlugin.csproj
+          echo "ver=${FW#net}" >> $GITHUB_OUTPUT
+
+      - name: .NET SDK kur
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Derle
+        run: dotnet publish src/plugins/SonmezKomboPlugin/SonmezKomboPlugin.csproj -c Release -o out/SonmezKomboPlugin
+
+      - name: BUILD_INFO yaz
+        run: |
+          {
+            echo "AssettoServer repo: ${{ env.ASSETTO_REPO }}"
+            echo "AssettoServer ref : ${{ github.event.inputs.assetto_ref !=  && github.event.inputs.assetto_ref || env.ASSETTO_REF_DEFAULT }}"
+            echo "Framework         : ${{ steps.fw.outputs.fw }}"
+            echo "Plugin commit     : ${{ github.sha }}"
+          } > out/SonmezKomboPlugin/BUILD_INFO.txt
+
+      - name: Artifact yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: SonmezKomboPlugin
+          path: out/SonmezKomboPlugin
