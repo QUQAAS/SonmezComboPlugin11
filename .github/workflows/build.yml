@@ -4,69 +4,88 @@ on:
   push:
   workflow_dispatch:
     inputs:
-      assetto_ref:
-        description: "AssettoServer tag/branch (ornek: v0.0.55-preview44)"
+      assettoserver_ref:
+        description: "AssettoServer tag/branch (bos birakirsan 0.0.55 preview 44 otomatik bulunur)"
         required: false
         default: ""
 
 env:
-  # AssettoServer kaynak repo ve surum. Surum etiketini GitHub > compujuckel/AssettoServer > Tags/Releases
-  # sayfasindan kontrol et; yanlissa "checkout" adiminda hata verir.
-  ASSETTO_REPO: compujuckel/AssettoServer
-  ASSETTO_REF_DEFAULT: v0.0.55-preview44
+  # Otomatik bulunamazsa buraya elle tag yazabilirsin (ornek: v0.0.55-preview44)
+  ASSETTOSERVER_REF: ""
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Plugin kaynagini al
-        uses: actions/checkout@v4
-        with:
-          path: plugin-repo
-
-      - name: AssettoServer kaynagini al
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ASSETTO_REPO }}
-          ref: ${{ github.event.inputs.assetto_ref !=  && github.event.inputs.assetto_ref || env.ASSETTO_REF_DEFAULT }}
-          path: src
-
-      - name: Plugini AssettoServer/plugins altina koy
-        run: |
-          mkdir -p src/plugins
-          cp -r plugin-repo/SonmezKomboPlugin src/plugins/SonmezKomboPlugin
-
-      - name: AssettoServer framework surumunu oku
-        id: fw
-        run: |
-          FW=$(grep -oP "(?<=<TargetFramework>)[^<]+" src/AssettoServer/AssettoServer.csproj | head -n1)
-          echo "Framework: $FW"
-          echo "fw=$FW" >> $GITHUB_OUTPUT
-          sed -i "s|<TargetFramework>[^<]*</TargetFramework>|<TargetFramework>$FW</TargetFramework>|" src/plugins/SonmezKomboPlugin/SonmezKomboPlugin.csproj
-          echo "ver=${FW#net}" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v4
 
       - name: .NET SDK kur
         uses: actions/setup-dotnet@v4
         with:
+          # .NET 11 henuz preview olabilir, bu yuzden quality: preview sart
+          dotnet-quality: preview
           dotnet-version: |
-            8.0.x
-            9.0.x
+            11.0.x
             10.0.x
+            9.0.x
+            8.0.x
+
+      - name: AssettoServer kaynagini indir (0.0.55 preview 44)
+        run: |
+          git clone https://github.com/compujuckel/AssettoServer.git AssettoServer
+          cd AssettoServer
+          REF="${{ github.event.inputs.assettoserver_ref }}"
+          if [ -z "$REF" ]; then REF="$ASSETTOSERVER_REF"; fi
+          if [ -z "$REF" ]; then
+            REF=$(git tag | grep -E '0\.0\.55' | grep -E '(preview|pre|p)[-_.]?44$' | sort -V | tail -n1 || true)
+          fi
+          if [ -z "$REF" ]; then
+            echo "0.0.55 preview 44 tag'i bulunamadi. Mevcut 0.0.55 tag'leri:"
+            git tag | grep -E '0\.0\.55' | sort -V || true
+            exit 1
+          fi
+          echo "Kullanilan ref: $REF"
+          git checkout "$REF"
+          echo "AS_REF=$REF" >> "$GITHUB_ENV"
+          echo "AS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Eklentiyi AssettoServer/plugins icine koy
+        run: |
+          echo "AssettoServer klasor yapisi:"
+          ls AssettoServer
+          mkdir -p AssettoServer/plugins
+          cp -r SonmezKomboPlugin AssettoServer/plugins/SonmezKomboPlugin
+          ls AssettoServer/plugins
+
+      - name: Framework'u AssettoServer ile eslestir
+        run: |
+          TFM=$(grep -rhoP '(?<=<TargetFramework>)[^<]+' AssettoServer/AssettoServer/AssettoServer.csproj AssettoServer/Directory.Build.props 2>/dev/null | head -n1 || true)
+          if [ -z "$TFM" ]; then
+            echo "HATA: AssettoServer'in TargetFramework degeri bulunamadi. Sessizce net9.0 secmiyorum; yanlis framework plugin'in yuklenmemesine yol acar."
+            exit 1
+          fi
+          echo "AssettoServer framework: $TFM"
+          echo "AS_TFM=$TFM" >> "$GITHUB_ENV"
+          sed -i "s|<TargetFramework>.*</TargetFramework>|<TargetFramework>$TFM</TargetFramework>|" AssettoServer/plugins/SonmezKomboPlugin/SonmezKomboPlugin.csproj
+
+      - name: SDK surumlerini goster
+        run: |
+          dotnet --list-sdks
+          cat AssettoServer/global.json 2>/dev/null || true
 
       - name: Derle
-        run: dotnet publish src/plugins/SonmezKomboPlugin/SonmezKomboPlugin.csproj -c Release -o out/SonmezKomboPlugin
+        run: dotnet publish AssettoServer/plugins/SonmezKomboPlugin -c Release -o out/SonmezKomboPlugin
 
-      - name: BUILD_INFO yaz
+      - name: Surum bilgisini yaz
         run: |
           {
-            echo "AssettoServer repo: ${{ env.ASSETTO_REPO }}"
-            echo "AssettoServer ref : ${{ github.event.inputs.assetto_ref !=  && github.event.inputs.assetto_ref || env.ASSETTO_REF_DEFAULT }}"
-            echo "Framework         : ${{ steps.fw.outputs.fw }}"
-            echo "Plugin commit     : ${{ github.sha }}"
+            echo "AssettoServer ref: $AS_REF"
+            echo "AssettoServer commit: $AS_COMMIT"
+            echo "Framework: $AS_TFM"
           } > out/SonmezKomboPlugin/BUILD_INFO.txt
+          cat out/SonmezKomboPlugin/BUILD_INFO.txt
 
-      - name: Artifact yukle
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: SonmezKomboPlugin
           path: out/SonmezKomboPlugin
